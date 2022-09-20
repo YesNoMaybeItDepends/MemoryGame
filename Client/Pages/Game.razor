@@ -1,0 +1,238 @@
+﻿@using MemoryGame.Shared
+@inject HttpClient Http
+@using System.Text.Json;
+@using System.Text.Json.Nodes
+@using Microsoft.AspNetCore.Components.Rendering
+@using Microsoft.Extensions.Logging;
+@using System.Timers
+@inject ILogger<Game> _logger;
+@using Services.GameService;
+@inject IGameService GameService;
+
+@page "/"
+@page "/game"
+
+<PageTitle>Memory Game</PageTitle>
+
+<style>
+    img {
+        width: 116px;
+        height: 116px;
+    }
+</style>
+
+<h3>Game</h3>
+
+@if (Cards.Count < numberOfPairs * 2)
+{
+    <p><em>Sneeding...</em> </p>
+}
+else
+{
+    <table>
+        <tbody>
+            @for (int i = 0; i != numberOfPairs * 2; i = i + columns)
+            {
+                <tr>
+                    @for (int j = 0; j != columns; j++)
+                    {
+                        var temp = i + j;
+                        <td><img src=@Cards.ElementAtOrDefault(temp)?.src @onclick="(() => onclick(temp))" /></td>
+                    }
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <h3>Guesses: @guesses</h3>
+    <h3>Time: @elapsedTime</h3>
+    @if (rightGuesses == Cards.Count)
+    {
+        <h3>You won!</h3>
+        <button>Play again?</button>
+    }
+}
+
+@code {
+    public int numberOfPairs = 9;
+    int rows = 3;
+    int columns = 6;
+
+    public List<Card> Cards = new List<Card>();
+
+    Card? lastCard = null;
+    bool firstGuess = true; // TODO we can actually get rid of this because lastCard is already a flag
+
+    bool pause = false;
+
+    int guesses = 0;
+    int rightGuesses = 0;
+
+    System.Timers.Timer timer = new System.Timers.Timer(1);
+    const string DEFAULT_TIME = "00:00:00";
+    string elapsedTime = DEFAULT_TIME;
+    DateTime startTime = DateTime.Now;
+
+    private void OnTimedEvent(Object source, ElapsedEventArgs e)
+    {
+        DateTime currentTime = e.SignalTime;
+        elapsedTime = $"{currentTime.Subtract(startTime)}";
+        StateHasChanged();
+    }
+
+    void StartTimer()
+    {
+        startTime = DateTime.Now;
+        timer = new System.Timers.Timer(1);
+        timer.Elapsed += OnTimedEvent;
+        timer.AutoReset = true;
+        timer.Start();
+    }
+
+    protected override void OnInitialized()
+    {
+        StartTimer();
+    }
+
+    async void onclick(int i)
+    {
+        // Block input if we're flipping cards
+        if (pause) return;
+
+        Card card = Cards.ElementAtOrDefault(i)!;
+
+        // Skip if the card is already revealed
+        if (card.revealed)
+        {
+            return;
+        }
+
+        guesses++;
+        card!.revealed = true;
+
+        // This was the first guess
+        if (firstGuess)
+        {
+            firstGuess = false;
+            lastCard = card;
+        }
+        // Second guess
+        else 
+        {
+            // Guessed right
+            if (lastCard.frontImage == card.frontImage && lastCard != card)
+            {
+                rightGuesses = rightGuesses + 2;
+            }
+            // Guessed wrong
+            else
+            {
+                // flip cards
+                pause = true;
+                await Task.Delay(500);
+                pause = false;
+
+                // Hide cards
+                lastCard.revealed = false;
+                card.revealed = false;
+            }
+            // Reset state
+            firstGuess = true;
+            lastCard = null;
+        }
+
+        // Game is won
+        if (rightGuesses == Cards.Count)
+        {
+            timer.Stop();
+            // DateTime finalTime = DateTime.ParseExact(elapsedTime, "YYYY-MM-DD HH:MM:SS.SSS", null, System.Globalization.DateTimeStyles.None);
+            TimeSpan finalTime = TimeSpan.Parse(elapsedTime);
+            var game = new MemoryGame.Shared.Game(guesses,finalTime);
+            await GameService.CreateGame(game);
+        }
+
+        StateHasChanged();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+
+        for (int i = 0; i < numberOfPairs; i++)
+        {
+            /* USING
+            *
+            //HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get,"https://www.thecocktaildb.com/api/json/v1/1/random.php");
+            //Drinks drinks = new Drinks();
+
+            //using (var response = await Http.SendAsync(request))
+            //{
+            //    response.EnsureSuccessStatusCode();
+            //    drinks = await response.Content.ReadFromJsonAsync<Drinks>();
+            //}
+
+            //string drinkImage = drinks.drinks[0].strDrinkThumb;
+
+            */
+
+            string drinkImage = await GetImage();
+
+            Card card;
+            if (drinkImage != null)
+            {
+                card = new Card(drinkImage);
+            }
+            else
+            {
+                card = new Card(string.Empty);
+            }
+            Cards.Add(card);
+        }
+
+        List<Card> clones = new List<Card>();
+        foreach(Card card in Cards)
+        {
+            Card clone = new Card(card.frontImage);
+            clones.Add(clone);
+        }
+        Cards.AddRange(clones);
+
+        Random rng = new Random();
+        Cards = Cards.OrderBy(a => rng.Next()).ToList();
+    }
+
+    async Task<string> GetImage()
+    {
+        string response = await Http.GetStringAsync("https://www.thecocktaildb.com/api/json/v1/1/random.php");
+        JsonObject jsonResponse = JsonObject.Parse(response).AsObject();
+
+        JsonObject jsonDrink = jsonResponse["drinks"].AsArray()[0].AsObject();
+        string drinkImage = jsonDrink["strDrinkThumb"].ToString();
+
+        return drinkImage;
+    }
+
+    public class Drinks
+    {
+        public List<Drink> drinks { get; set; }
+    }
+
+    public class Drink
+    {
+        public string idDrink { get; set; }
+        public string strDrinkThumb { get; set; }
+    }
+
+    public class Card
+    {
+        public bool revealed = false;
+        private string backImage { get; set; } = "https://i.imgur.com/M19EtgX.png";
+        public string frontImage { get; set; } = string.Empty;
+        public string src => revealed ? frontImage : backImage;
+
+        public Card(string image)
+        {
+            frontImage = image;
+        }
+    }
+}
+

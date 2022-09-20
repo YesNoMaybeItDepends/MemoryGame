@@ -1,0 +1,32 @@
+﻿@using MemoryGame.Client.Services.GameService;
+@inject IGameService GameService;
+
+@page "/games"
+
+<h3>Games</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Attempts</th>
+      <th>Time</th>
+    </tr>
+  </thead>
+  <tbody>
+    @foreach (var game in GameService.Games)
+        {
+            <tr>
+              <td>@game.Attempts</td>
+              <td>@game.Time</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    protected override async void OnInitialized()
+    {
+        await GameService.GetGames();
+        StateHasChanged();
+    }
+}
